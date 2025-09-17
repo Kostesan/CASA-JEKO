@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>JS 3D Tool</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html,body { margin:0; height:100%; background:#111; color:#eee; font-family:system-ui; }
+    #ui { position:fixed; top:10px; left:10px; display:flex; gap:8px; flex-wrap:wrap; z-index:10 }
+    button, select { padding:6px 10px; background:#1f1f1f; color:#eee; border:1px solid #333; border-radius:8px; }
+    button:hover { background:#2a2a2a; cursor:pointer; }
+    #canvas { width:100vw; height:100vh; display:block; }
+    .hint { position:fixed; bottom:10px; left:10px; opacity:.7; font-size:12px }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <button id="addCube">Add Cube</button>
+    <button id="addSphere">Add Sphere</button>
+    <select id="mode">
+      <option value="translate">Move</option>
+      <option value="rotate">Rotate</option>
+      <option value="scale">Scale</option>
+    </select>
+    <button id="delete">Delete</button>
+    <button id="export">Export GLTF</button>
+  </div>
+  <div class="hint">Click an object to select. Hold right mouse to pan, wheel to zoom.</div>
+  <canvas id="canvas"></canvas>
+
+  <!-- Three.js & helpers from CDN -->
+  <script type="module">
+    import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
+    import { OrbitControls } from "https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js";
+    import { TransformControls } from "https://unpkg.com/three@0.160.0/examples/jsm/controls/TransformControls.js";
+    import { GLTFExporter } from "https://unpkg.com/three@0.160.0/examples/jsm/exporters/GLTFExporter.js";
+
+    // --- Renderer / Scene / Camera ---
+    const canvas = document.getElementById("canvas");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111);
+
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 5000);
+    camera.position.set(6, 5, 10);
+
+    // --- Lights ---
+    scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+    dir.position.set(5, 10, 7);
+    scene.add(dir);
+
+    // --- Grid & axes ---
+    const grid = new THREE.GridHelper(100, 100, 0x444444, 0x222222);
+    scene.add(grid);
+    const axes = new THREE.AxesHelper(2);
+    scene.add(axes);
+
+    // --- Controls ---
+    const orbit = new OrbitControls(camera, renderer.domElement);
+    orbit.enableDamping = true;
+
+    const transform = new TransformControls(camera, renderer.domElement);
+    transform.setSize(1.1);
+    transform.addEventListener("dragging-changed", e => orbit.enabled = !e.value);
+    scene.add(transform);
+
+    // --- State ---
+    const objects = [];      // creatable, pickable objects
+    let selected = null;
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    // --- Helpers ---
+    function addCube() {
+      const geo = new THREE.BoxGeometry(1,1,1);
+      const mat = new THREE.MeshStandardMaterial({ color: randomColor(), metalness:0.1, roughness:0.8 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(rand(-2,2), 0.5, rand(-2,2));
+      mesh.castShadow = mesh.receiveShadow = true;
+      scene.add(mesh);
+      objects.push(mesh);
+      select(mesh);
+    }
+
+    function addSphere() {
+      const geo = new THREE.SphereGeometry(0.6, 32, 16);
+      const mat = new THREE.MeshStandardMaterial({ color: randomColor(), metalness:0.1, roughness:0.8 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(rand(-2,2), 0.6, rand(-2,2));
+      scene.add(mesh);
+      objects.push(mesh);
+      select(mesh);
+    }
+
+    function select(obj) {
+      if (selected === obj) return;
+      if (selected) {
+        selected.traverse?.(n => { if (n.material?.emissive) n.material.emissive.setHex(0x000000); });
+      }
+      selected = obj || null;
+      if (selected) {
+        if (selected.material?.emissive) selected.material.emissive.setHex(0x222222);
+        transform.attach(selected);
+      } else {
+        transform.detach();
+      }
+    }
+
+    function onPick(event) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+      const hits = raycaster.intersectObjects(objects, false);
+      select(hits[0]?.object ?? null);
+    }
+
+    function randomColor() {
+      const hue = Math.floor(Math.random()*360);
+      return new THREE.Color(`hsl(${hue} 70% 55%)`);
+    }
+    const rand = (a,b)=> a + Math.random()*(b-a);
+
+    // --- Export GLTF (.glb) ---
+    async function exportGLTF() {
+      const exporter = new GLTFExporter();
+      exporter.parse(scene, glb => {
+        const blob = new Blob([glb], { type: "model/gltf-binary" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "scene.glb";
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }, { binary:true, onlyVisible:true, trs:false, includeCustomExtensions:false });
+    }
+
+    // --- UI wiring ---
+    document.getElementById("addCube").onclick = addCube;
+    document.getElementById("addSphere").onclick = addSphere;
+    document.getElementById("mode").onchange = e => transform.setMode(e.target.value);
+    document.getElementById("delete").onclick = () => {
+      if (!selected) return;
+      transform.detach();
+      scene.remove(selected);
+      const i = objects.indexOf(selected);
+      if (i >= 0) objects.splice(i,1);
+      selected = null;
+    };
+    document.getElementById("export").onclick = exportGLTF;
+
+    // --- Events ---
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth/window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+    renderer.domElement.addEventListener("pointerdown", (e) => {
+      // ignore when starting a gizmo drag
+      if (e.target.closest) {
+        // TransformControls uses the same canvas; rely on its 'dragging-changed' to disable orbit.
+      }
+      // Only pick if not currently transforming
+      if (transform.dragging) return;
+      onPick(e);
+    });
+
+    // --- Loop ---
+    renderer.setAnimationLoop(() => {
+      orbit.update();
+      renderer.render(scene, camera);
+    });
+  </script>
+</body>
+</html>
